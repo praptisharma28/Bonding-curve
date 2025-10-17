@@ -25,7 +25,7 @@ pub struct Config {
 
     pub initial_virtual_token_reserve: u64, // 200_000_000 M for shaping the curve
     pub initial_virtual_sol_reserve: u64, // It makes the curve smoother and prevents the price from starting at zero or being too volatile initially.
-    pub initial_real_token_reserve: u64,  // 800_000_000 M for bonding curve launch
+    pub initial_real_token_reserve: u64,  // 800_000_000 M for bonding curve launch for users to buy
     pub initial_token_supply: u64,        // total tokens minted
 
     pub buy_fee_percentage: f64,
