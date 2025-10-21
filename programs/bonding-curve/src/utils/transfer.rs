@@ -65,7 +65,7 @@ pub fn token_transfer_from_signers<'info>(
     authority: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
     amount: u64,
-    signer_seeds: &[&[u8]],
+    signer_seeds: &[&[&[u8]]],
 ) -> Result<()> {
     let cpi_context = CpiContext::new_with_signer(
         token_program.to_account_info(),
