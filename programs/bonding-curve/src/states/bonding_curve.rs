@@ -59,20 +59,10 @@ impl<'info> BondingCurve {
         require!(amount_out >= min_amount_out, ErrorCode::SlippageExceeded);
 
         // Transfer fee to the fee wallet
-        sol_transfer_from_user(
-            &user,
-            fee_recipient,
-            system_program,
-            fee,
-        )?;
+        sol_transfer_from_user(&user, fee_recipient, system_program, fee)?;
 
         // Transfer adjust amount to the bonding curve
-        sol_transfer_from_user(
-            &user,
-            curve_pda,
-            system_program,
-            (amount_in - fee),
-        )?;
+        sol_transfer_from_user(&user, curve_pda, system_program, (amount_in - fee))?;
 
         // Transfer token from the PDA to the user
         token_transfer_from_signers(
@@ -85,18 +75,20 @@ impl<'info> BondingCurve {
         );
 
         // calculate new reserves
-        let new_token_reserve = self.virtual_token_reserve
+        let new_token_reserve = self
+            .virtual_token_reserve
             .checked_sub(amount_out)
             .ok_or(ErrorCode::CalculationError)?;
 
-        let new_sol_reserves = self.virtual_sol_reserve
+        let new_sol_reserves = self
+            .virtual_sol_reserve
             .checked_add(amount_in - fee)
             .ok_or(ErrorCode::CalculationError)?;
 
         // update reserves on the curve
         self.update_reserves(new_sol_reserves, new_token_reserve)?;
 
-        emit!(TokenPurchased{
+        emit!(TokenPurchased {
             token_mint: token_mint.key(),
             buyer: user.key(),
             sol_amount: amount_in,
@@ -108,7 +100,7 @@ impl<'info> BondingCurve {
         // Return true if the curve reaches its limit
         if new_sol_reserves >= curve_limit {
             self.is_compeleted = true;
-            emit!(CurveCompleted{
+            emit!(CurveCompleted {
                 token_mint: token_mint.key(),
                 final_sol_reserve: new_sol_reserves,
                 final_token_reserve: new_token_reserve,
@@ -121,14 +113,85 @@ impl<'info> BondingCurve {
     }
 
     // sell
+    pub fn sell(
+        &mut self,
+        token_mint: &Account<'info, Mint>,
+        user: &Signer<'info>,
+        curve_pda: &mut AccountInfo<'info>,
+        user_ata: &mut AccountInfo<'info>,
+        fee_recipient: &mut AccountInfo<'info>,
+        curve_ata: &mut AccountInfo<'info>,
+        amount_in: u64,
+        min_amount_out: u64,
+        fee_percentage: f64,
+        curve_bump: u8,
+        system_program: &AccountInfo<'info>,
+        token_program: &AccountInfo<'info>,
+    ) -> Result<Bool> {
+        // getting the amount out
+        let (amount_out, fee) = self.calculate_amount_out(amount_in, 1, fee_percentage)?;
+
+        require!(
+            amount_out >= min_amount_out,
+            ErrorCode::InsufficientAmountOut
+        );
+
+        let token = token_mint.key();
+        let signer_seeds = &[&BondingCurve::get_signer(&token, &curve_bump)];
+
+        token_transfer_from_user(user_ata, curve_ata, user, token_program, amount_in)?;
+
+        // Transfer fee to the fee wallet
+        sol_transfer_with_signers(
+            curve_pda,
+            user,
+            system_program,
+            signer_seeds,
+            amount_out = fee_amount,
+        )?;
+
+        sol_transfer_with_signers(
+            curve_pda,
+            user,
+            system_program,
+            signer_seeds,
+            amount_out = amount_out - fee,
+        )?;
+
+        let new_token_reserve = self
+            .virtual_token_reserve
+            .checked_add(amount_in)
+            .ok_or(ErrorCode::InvalidReserves)?;
+        let new_sol_reserve = self
+            .virtual_sol_reserve
+            .checked_add(amount_in)
+            .ok_or(ErrorCode::InvalidReserves)?;
+
+        self.update_reserves(new_sol_reserve, new_token_reserve)?;
+
+        emit!(TokenSold {
+            token_mint: token_mint.key(),
+            sol_amount: amount_out,
+            token_amount: amount_in,
+            fee_amount: fee_amount,
+            price: new_sol_reserve / new_token_reserve,
+        });
+
+        Ok(());
+    }
 
     // calculate amount out
-    pub fn calculate_amount_out(&mut self, amount_in: u64, direction:u8, fee_percentage: f64) -> Result<u64> {
+    pub fn calculate_amount_out(
+        &mut self,
+        amount_in: u64,
+        direction: u8,
+        fee_percentage: f64,
+    ) -> Result<u64> {
         // calculate fee
         let fee = (amount_in as f64 * fee_percentage / 100.0) as f64;
         let amount_in_after_fee = amount_in
-        .checked_sub(fee)
-        .ok_or(ErrorCode::CalculationError)? as f64;
+            .checked_sub(fee)
+            .ok_or(ErrorCode::CalculationError)? as f64;
 
         let virtual_sol = self.virtual_sol_reserve as f64;
         let virtual_token = self.virtual_token_reserve as f64;
@@ -136,12 +199,11 @@ impl<'info> BondingCurve {
 
         const CRR: f64 = 0.5;
 
-        let amount_out = if direction == 0{
+        let amount_out = if direction == 0 {
             require!(virtual_sol > 0.0, ErrorCode::CalculationError);
             let base = 1.0 + amount_in_after_fee / virtual_sol;
             virtual_token * (base.powf(CRR) - 1.0)
-        } else
-        {
+        } else {
             require!(virtual_token > 0.0, ErrorCode::CalculationError);
             let base = 1.0 - amount_in_after_fee / virtual_token;
             virtual_sol * (1.0 - base.powf(1.0 / CRR))
